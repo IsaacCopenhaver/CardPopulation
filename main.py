@@ -14,8 +14,36 @@ test_query = """
 {
   products(first: 1, query: "tag:single") {
     nodes {
+      legacyResourceId
       title
       tags
+      rarity: metafield(namespace: "custom", key: "rarity") {
+        value
+      }
+      collectorNumber: metafield(namespace: "custom", key: "number") {
+        value
+      }
+      tcgProductId: metafield(namespace: "custom", key: "productId") {
+        value
+      }
+      categoryId: metafield(namespace: "custom", key: "category_id") {
+        value
+      }
+      gameName: metafield(namespace: "custom", key: "game") {
+        value
+      }
+      groupId: metafield(namespace: "custom", key: "group_id") {
+        value
+      }
+      setName: metafield(namespace: "custom", key: "set") {
+        value
+      }
+      variants(first: 5) {
+        nodes {
+          title
+          price
+        }
+      }
     }
   }
 }

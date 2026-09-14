@@ -1,12 +1,14 @@
 import os
 from dotenv import load_dotenv
 from shopify import get_access_token, run_graphql_query
+from database import build_card_data, get_database_connection, insert_card
 
 load_dotenv()
 
 SHOP = os.getenv("SHOP")
 CLIENT_ID = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 access_token = get_access_token(SHOP, CLIENT_ID, CLIENT_SECRET)
 
@@ -49,3 +51,10 @@ test_query = """
 
 result = run_graphql_query(SHOP, access_token, test_query)
 print(result)
+
+card_data = build_card_data(result["data"]["product"])
+print(card_data)
+
+conn = get_database_connection(DATABASE_URL)
+insert_card(conn, card_data)
+print("Card data inserted successfully.")

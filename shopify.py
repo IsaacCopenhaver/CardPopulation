@@ -1,9 +1,12 @@
 import sys
 import requests
 
+
 def get_access_token(SHOP, CLIENT_ID, CLIENT_SECRET):
     if not SHOP or not CLIENT_ID or not CLIENT_SECRET:
-        print("Missing required env vars. Copy .env.example to .env and fill in your values.")
+        print(
+            "Missing required env vars. Copy .env.example to .env and fill in your values."
+        )
         sys.exit(1)
 
     response = requests.post(
@@ -21,7 +24,9 @@ def get_access_token(SHOP, CLIENT_ID, CLIENT_SECRET):
     )
 
     if not response.ok:
-        raise Exception(f"Token request failed ({response.status_code}): {response.text}")
+        raise Exception(
+            f"Token request failed ({response.status_code}): {response.text}"
+        )
 
     access_token = response.json()["access_token"]
 
@@ -39,6 +44,12 @@ def run_graphql_query(SHOP, access_token, query):
     )
 
     if not response.ok:
-        raise Exception(f"GraphQL request failed ({response.status_code}): {response.text}")
+        raise Exception(
+            f"GraphQL request failed ({response.status_code}): {response.text}"
+        )
 
-    return response.json()
+    response_data = response.json()
+    if "errors" in response_data:
+        raise Exception(f"GraphQL query returned errors: {response_data['errors']}")
+    
+    return response_data

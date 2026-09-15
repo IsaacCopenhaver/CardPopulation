@@ -48,4 +48,8 @@ def run_graphql_query(SHOP, access_token, query):
             f"GraphQL request failed ({response.status_code}): {response.text}"
         )
 
-    return response.json()
+    response_data = response.json()
+    if "errors" in response_data:
+        raise Exception(f"GraphQL query returned errors: {response_data['errors']}")
+    
+    return response_data

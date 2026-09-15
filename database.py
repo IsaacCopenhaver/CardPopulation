@@ -1,7 +1,12 @@
+import sys
+
 import psycopg2
 
 
 def get_database_connection(database_url):
+    if not database_url:
+        print("Missing DATABASE_URL. Copy .env.example to .env and fill in your values.")
+        sys.exit(1)
     conn = psycopg2.connect(database_url)
     return conn
 
@@ -66,3 +71,5 @@ def insert_card(conn, data):
         conn.rollback()
         print(f"Error inserting card data: {e}")
         raise e
+    finally:
+        cursor.close()

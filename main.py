@@ -52,12 +52,19 @@ def run():
     """
 
     result = run_graphql_query(SHOP, access_token, test_query)
-    card_data = build_card_data(result["data"]["product"])
+    product = result["data"]["product"]
+    if product is None: 
+        raise Exception("Product not found in Shopify response.")
+
+    card_data = build_card_data(product)
 
     conn = get_database_connection(DATABASE_URL)
     try:
-        insert_card(conn, card_data)
-        print("Card data inserted successfully.")
+        was_inserted = insert_card(conn, card_data)
+        if was_inserted:
+            print("Card data inserted successfully.")
+        else:
+            print("Card already exists, no changes made.")
     finally:
         conn.close()
 

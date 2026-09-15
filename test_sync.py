@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from database import build_card_data, insert_card
+from database import build_card_data, get_database_connection, insert_card
 from shopify import get_access_token
 from main import run
 
@@ -111,6 +111,17 @@ def test_get_access_token_failed_request_raises(mock_post):
         get_access_token("shop.myshopify.com", "id", "secret")
 
 
+# --- get_database_connection ---
+# Same idea as get_access_token's missing-credentials test, a missing
+# DATABASE_URL should fail loudly instead of silently falling back to some
+# unintended default database.
+
+
+def test_get_database_connection_missing_url_exits():
+    with pytest.raises(SystemExit):
+        get_database_connection(None)
+
+
 # --- insert_card ---
 # This one touches a database connection, so instead of connecting to a
 # real database, we fake the connection object itself, MagicMock() makes
@@ -192,7 +203,8 @@ def test_run_calls_everything_in_order(
     mock_get_access_token.return_value = "fake-token"
     mock_run_graphql_query.return_value = {"data": {"product": {}}}
     mock_build_card_data.return_value = {"game": {}, "set": {}, "card": {}}
-    mock_get_database_connection.return_value = "fake-connection"
+    mock_conn = MagicMock()
+    mock_get_database_connection.return_value = mock_conn
 
     run()
 
@@ -201,5 +213,7 @@ def test_run_calls_everything_in_order(
     mock_build_card_data.assert_called_once()
     mock_get_database_connection.assert_called_once()
     mock_insert_card.assert_called_once_with(
-        "fake-connection", {"game": {}, "set": {}, "card": {}}
+        mock_conn, {"game": {}, "set": {}, "card": {}}
     )
+    # The connection should be closed after use, no matter what.
+    mock_conn.close.assert_called_once()

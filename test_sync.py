@@ -130,6 +130,9 @@ def test_get_database_connection_missing_url_exits():
 
 def test_insert_card_success():
     mock_conn = MagicMock()
+    # rowcount == 1 simulates a real new row actually being inserted, as
+    # opposed to ON CONFLICT DO NOTHING silently skipping it.
+    mock_conn.cursor.return_value.rowcount = 1
     data = {
         "game": {"id": 89, "name": "Riftbound"},
         "set": {"id": 24698, "name": "Vendetta"},
@@ -143,13 +146,37 @@ def test_insert_card_success():
         },
     }
 
-    insert_card(mock_conn, data)
+    result = insert_card(mock_conn, data)
 
     cursor = mock_conn.cursor.return_value
     # Three inserts: games, sets, cards.
     assert cursor.execute.call_count == 3
     mock_conn.commit.assert_called_once()
     mock_conn.rollback.assert_not_called()
+    assert result is True
+
+
+def test_insert_card_already_exists_returns_false():
+    mock_conn = MagicMock()
+    # rowcount == 0 simulates ON CONFLICT DO NOTHING skipping a card that's
+    # already in the database, nothing new was actually inserted.
+    mock_conn.cursor.return_value.rowcount = 0
+    data = {
+        "game": {"id": 89, "name": "Riftbound"},
+        "set": {"id": 24698, "name": "Vendetta"},
+        "card": {
+            "shopifyProductId": "8042708992090",
+            "name": "Kai'Sa, Survivor",
+            "rarity": "Epic",
+            "collectorNumber": "SP1/006",
+            "tcgProductId": 707648,
+            "marketPrice": "{}",
+        },
+    }
+
+    result = insert_card(mock_conn, data)
+
+    assert result is False
 
 
 def test_insert_card_failure_rolls_back():

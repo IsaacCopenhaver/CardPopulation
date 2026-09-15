@@ -55,8 +55,11 @@ def run():
     card_data = build_card_data(result["data"]["product"])
 
     conn = get_database_connection(DATABASE_URL)
-    insert_card(conn, card_data)
-    print("Card data inserted successfully.")
+    try:
+        insert_card(conn, card_data)
+        print("Card data inserted successfully.")
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

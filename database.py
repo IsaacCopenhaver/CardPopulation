@@ -5,7 +5,7 @@ import psycopg2
 
 def get_database_connection(database_url):
     if not database_url:
-        print("Missing DATABASE_URL. Copy .env.example to .env and fill in your values.")
+        print("Missing DATABASE_URL. Set it in the environment before running.")
         sys.exit(1)
     conn = psycopg2.connect(database_url)
     return conn
@@ -66,10 +66,12 @@ def insert_card(conn, data):
                 data["card"]["marketPrice"],
             ),
         )
+        was_inserted = cursor.rowcount == 1
         conn.commit()
+        return was_inserted
     except Exception as e:
         conn.rollback()
         print(f"Error inserting card data: {e}")
-        raise e
+        raise
     finally:
         cursor.close()

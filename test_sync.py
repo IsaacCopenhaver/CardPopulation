@@ -1,7 +1,12 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from database import build_card_data, get_database_connection, insert_card
-from shopify import get_access_token
+from shopify import (
+    get_access_token,
+    start_bulk_operation,
+    poll_bulk_operation,
+    download_bulk_results,
+)
 from main import run
 
 # --- build_card_data ---
@@ -109,6 +114,175 @@ def test_get_access_token_failed_request_raises(mock_post):
 
     with pytest.raises(Exception):
         get_access_token("shop.myshopify.com", "id", "secret")
+
+
+# --- start_bulk_operation ---
+# This one wraps run_graphql_query in a mutation, so we mock that instead of
+# requests.post directly -- we're testing how start_bulk_operation reacts to
+# the response shape, not the HTTP layer underneath it.
+
+
+@patch("shopify.run_graphql_query")
+def test_start_bulk_operation_success(mock_run_graphql_query):
+    mock_run_graphql_query.return_value = {
+        "data": {
+            "bulkOperationRunQuery": {
+                "bulkOperation": {
+                    "id": "gid://shopify/BulkOperation/1",
+                    "status": "CREATED",
+                },
+                "userErrors": [],
+            }
+        }
+    }
+
+    operation = start_bulk_operation(
+        "shop.myshopify.com", "token", "{ products { edges { node { id } } } }"
+    )
+
+    assert operation == {"id": "gid://shopify/BulkOperation/1", "status": "CREATED"}
+
+
+@patch("shopify.run_graphql_query")
+def test_start_bulk_operation_user_error_raises(mock_run_graphql_query):
+    # A second bulk operation while one's already running comes back as a
+    # userError, not an HTTP failure, so this has to be checked separately
+    # from run_graphql_query's own error handling.
+    mock_run_graphql_query.return_value = {
+        "data": {
+            "bulkOperationRunQuery": {
+                "bulkOperation": None,
+                "userErrors": [{"field": ["query"], "message": "already in progress"}],
+            }
+        }
+    }
+
+    with pytest.raises(Exception):
+        start_bulk_operation(
+            "shop.myshopify.com", "token", "{ products { edges { node { id } } } }"
+        )
+
+
+# --- poll_bulk_operation ---
+# This one polls in a loop, so we also mock time.sleep -- otherwise the
+# waiting/timeout tests would actually block for real seconds instead of
+# running instantly.
+
+
+@patch("shopify.run_graphql_query")
+def test_poll_bulk_operation_completed_immediately(mock_run_graphql_query):
+    mock_run_graphql_query.return_value = {
+        "data": {
+            "currentBulkOperation": {
+                "id": "gid://shopify/BulkOperation/1",
+                "status": "COMPLETED",
+                "errorCode": None,
+                "objectCount": "42",
+                "url": "https://example.com/results.jsonl",
+                "partialDataUrl": None,
+            }
+        }
+    }
+
+    operation = poll_bulk_operation("shop.myshopify.com", "token")
+
+    assert operation["status"] == "COMPLETED"
+    assert operation["url"] == "https://example.com/results.jsonl"
+
+
+@patch("shopify.time.sleep")
+@patch("shopify.run_graphql_query")
+def test_poll_bulk_operation_waits_then_completes(mock_run_graphql_query, mock_sleep):
+    # First check: still running. Second check: done. poll_bulk_operation
+    # should sleep exactly once in between, not raise or give up early.
+    mock_run_graphql_query.side_effect = [
+        {"data": {"currentBulkOperation": {"status": "RUNNING"}}},
+        {
+            "data": {
+                "currentBulkOperation": {
+                    "status": "COMPLETED",
+                    "url": "https://example.com/results.jsonl",
+                }
+            }
+        },
+    ]
+
+    operation = poll_bulk_operation("shop.myshopify.com", "token", poll_interval=2)
+
+    assert operation["status"] == "COMPLETED"
+    mock_sleep.assert_called_once_with(2)
+
+
+@patch("shopify.run_graphql_query")
+def test_poll_bulk_operation_failed_raises(mock_run_graphql_query):
+    mock_run_graphql_query.return_value = {
+        "data": {
+            "currentBulkOperation": {
+                "status": "FAILED",
+                "errorCode": "INTERNAL_SERVER_ERROR",
+            }
+        }
+    }
+
+    with pytest.raises(Exception):
+        poll_bulk_operation("shop.myshopify.com", "token")
+
+
+@patch("shopify.run_graphql_query")
+def test_poll_bulk_operation_missing_operation_raises(mock_run_graphql_query):
+    # currentBulkOperation is None when the shop has never run one at all.
+    mock_run_graphql_query.return_value = {"data": {"currentBulkOperation": None}}
+
+    with pytest.raises(Exception):
+        poll_bulk_operation("shop.myshopify.com", "token")
+
+
+@patch("shopify.time.sleep")
+@patch("shopify.run_graphql_query")
+def test_poll_bulk_operation_timeout_raises(mock_run_graphql_query, mock_sleep):
+    # Status never changes, so this should give up once elapsed time passes
+    # timeout -- mocking sleep means this test doesn't actually wait.
+    mock_run_graphql_query.return_value = {
+        "data": {"currentBulkOperation": {"status": "RUNNING"}}
+    }
+
+    with pytest.raises(TimeoutError):
+        poll_bulk_operation("shop.myshopify.com", "token", poll_interval=1, timeout=2)
+
+
+# --- download_bulk_results ---
+# This one hits requests.get directly, not run_graphql_query -- the JSONL
+# file lives on Shopify's CDN, not behind the GraphQL endpoint -- so we mock
+# requests.get the same way get_access_token's tests mock requests.post.
+
+
+def test_download_bulk_results_no_url_returns_empty_list():
+    # Shopify doesn't create a file when a bulk query matches zero objects,
+    # so url is None in that case -- nothing to download.
+    assert download_bulk_results(None) == []
+
+
+@patch("shopify.requests.get")
+def test_download_bulk_results_parses_jsonl(mock_get):
+    mock_response = MagicMock()
+    mock_response.ok = True
+    mock_response.text = '{"id": 1}\n{"id": 2}\n'
+    mock_get.return_value = mock_response
+
+    results = download_bulk_results("https://example.com/results.jsonl")
+
+    assert results == [{"id": 1}, {"id": 2}]
+
+
+@patch("shopify.requests.get")
+def test_download_bulk_results_failed_request_raises(mock_get):
+    mock_response = MagicMock()
+    mock_response.ok = False
+    mock_response.status_code = 500
+    mock_get.return_value = mock_response
+
+    with pytest.raises(Exception):
+        download_bulk_results("https://example.com/results.jsonl")
 
 
 # --- get_database_connection ---

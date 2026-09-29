@@ -8,6 +8,7 @@ from shopify import (
     download_bulk_results,
 )
 from main import run
+from bulk_sync import sync_products, run_bulk_sync
 
 # --- build_card_data ---
 # Pure function, no network or database involved, so no mocking needed here,
@@ -283,6 +284,115 @@ def test_download_bulk_results_failed_request_raises(mock_get):
 
     with pytest.raises(Exception):
         download_bulk_results("https://example.com/results.jsonl")
+
+
+# --- sync_products ---
+# The real ingestion loop. conn is mocked (same approach as insert_card's own
+# tests) so we're only testing the loop's decisions, not a real database.
+
+
+def _valid_product(shopify_id="1", title="Test Card"):
+    return {
+        "legacyResourceId": shopify_id,
+        "title": title,
+        "cardName": {"value": title},
+        "rarity": {"value": "Common"},
+        "collectorNumber": {"value": "001"},
+        "tcgProductId": {"value": "1"},
+        "categoryId": {"value": "1"},
+        "gameName": {"value": "Test Game"},
+        "groupId": {"value": "1"},
+        "setName": {"value": "Test Set"},
+        "pricing": {"value": "{}"},
+    }
+
+
+def test_sync_products_counts_each_outcome_separately():
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value.rowcount = 1
+
+    missing_metadata = {
+        "legacyResourceId": "3",
+        "title": "Balefire Dragon 129/264 ISD",
+        "cardName": None,
+        "rarity": None,
+        "collectorNumber": None,
+        "tcgProductId": None,
+        "categoryId": None,
+        "gameName": None,
+        "groupId": None,
+        "setName": None,
+        "pricing": None,
+    }
+    valid_new = _valid_product(shopify_id="1")
+
+    counts = sync_products(mock_conn, [missing_metadata, valid_new])
+
+    assert counts == {
+        "skipped_missing_metadata": 1,
+        "inserted": 1,
+        "already_existing": 0,
+    }
+    # Only the one valid product should have ever reached the database.
+    assert mock_conn.cursor.return_value.execute.call_count == 3  # games, sets, cards
+
+
+def test_sync_products_counts_already_existing_separately_from_inserted():
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value.rowcount = 0  # ON CONFLICT DO NOTHING skipped it
+
+    counts = sync_products(mock_conn, [_valid_product()])
+
+    assert counts["inserted"] == 0
+    assert counts["already_existing"] == 1
+
+
+def test_sync_products_lets_database_errors_surface():
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value.execute.side_effect = Exception("simulated database failure")
+
+    with pytest.raises(Exception):
+        sync_products(mock_conn, [_valid_product()])
+
+
+# --- run_bulk_sync ---
+# Same approach as test_run_calls_everything_in_order: mock every dependency
+# and confirm the orchestration wires them together correctly.
+
+
+@patch("bulk_sync.sync_products")
+@patch("bulk_sync.get_database_connection")
+@patch("bulk_sync.download_bulk_results")
+@patch("bulk_sync.poll_bulk_operation")
+@patch("bulk_sync.start_bulk_operation")
+@patch("bulk_sync.get_access_token")
+@patch("bulk_sync.load_dotenv")
+def test_run_bulk_sync_calls_everything_in_order(
+    mock_load_dotenv,
+    mock_get_access_token,
+    mock_start_bulk_operation,
+    mock_poll_bulk_operation,
+    mock_download_bulk_results,
+    mock_get_database_connection,
+    mock_sync_products,
+):
+    mock_get_access_token.return_value = "fake-token"
+    mock_start_bulk_operation.return_value = {"id": "gid://shopify/BulkOperation/1"}
+    mock_poll_bulk_operation.return_value = {
+        "objectCount": "2",
+        "url": "https://example.com/results.jsonl",
+    }
+    mock_download_bulk_results.return_value = [{"title": "Test Card"}]
+    mock_conn = MagicMock()
+    mock_get_database_connection.return_value = mock_conn
+    mock_sync_products.return_value = {"inserted": 1}
+
+    result = run_bulk_sync()
+
+    mock_download_bulk_results.assert_called_once_with("https://example.com/results.jsonl")
+    mock_sync_products.assert_called_once_with(mock_conn, [{"title": "Test Card"}])
+    mock_conn.close.assert_called_once()
+    assert result == {"inserted": 1}
 
 
 # --- get_database_connection ---
